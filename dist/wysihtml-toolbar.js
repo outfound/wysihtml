@@ -647,7 +647,11 @@ wysihtml5.browser = (function() {
     if (navigator.appName == 'Microsoft Internet Explorer') {
       re = new RegExp("MSIE ([0-9]{1,}[\.0-9]{0,})");
     } else if (navigator.appName == 'Netscape') {
-      re = new RegExp("Trident/.*rv:([0-9]{1,}[\.0-9]{0,})");
+      if (navigator.userAgent.indexOf("Trident") > -1) {
+        re = new RegExp("Trident/.*rv:([0-9]{1,}[\.0-9]{0,})");
+      } else if ((/Edge\/(\d+)./i).test(navigator.userAgent)) {
+        re = /Edge\/(\d+)./i;
+      }
     }
 
     if (re && re.exec(navigator.userAgent) != null) {
@@ -730,7 +734,7 @@ wysihtml5.browser = (function() {
      * Firefox sometimes shows a huge caret in the beginning after focusing
      */
     displaysCaretInEmptyContentEditableCorrectly: function() {
-      return isIE();
+      return isIE(12, ">");
     },
 
     /**
@@ -802,8 +806,8 @@ wysihtml5.browser = (function() {
          // When inserting unordered or ordered lists in Firefox, Chrome or Safari, the current selection or line gets
          // converted into a list (<ul><li>...</li></ul>, <ol><li>...</li></ol>)
          // IE and Opera act a bit different here as they convert the entire content of the current block element into a list
-        "insertUnorderedList":  isIE(9, ">="),
-        "insertOrderedList":    isIE(9, ">=")
+        "insertUnorderedList":  isIE(9, ">=") || isIE(12, "<="),
+        "insertOrderedList":    isIE(9, ">=")|| isIE(12, "<=")
       };
 
       // Firefox throws errors for queryCommandSupported, so we have to build up our own object of supported commands
@@ -950,7 +954,7 @@ wysihtml5.browser = (function() {
      * IE is the only browser who fires the "focus" event not immediately when .focus() is called on an element
      */
     doesAsyncFocus: function() {
-      return isIE();
+      return isIE(12, ">");
     },
 
     /**
@@ -9320,27 +9324,33 @@ wysihtml5.Commands = Base.extend(
   };
 
   var createListFallback = function(nodeName, composer) {
+    var sel;
+
+    if (!composer.selection.isCollapsed()) {
+      sel = rangy.saveSelection(composer.win);
+    }
+
     // Fallback for Create list
-    composer.selection.executeAndRestoreRangy(function() {
-      var tempClassName =  "_wysihtml5-temp-" + new Date().getTime(),
-          tempElement = composer.selection.deblockAndSurround({
-            "nodeName": "div",
-            "className": tempClassName
-          }),
-          isEmpty, list;
+    var tempClassName =  "_wysihtml5-temp-" + new Date().getTime(),
+        tempElement = composer.selection.deblockAndSurround({
+          "nodeName": "div",
+          "className": tempClassName
+        }),
+        isEmpty, list;
 
-      // This space causes new lists to never break on enter
-      var INVISIBLE_SPACE_REG_EXP = /\uFEFF/g;
-      tempElement.innerHTML = tempElement.innerHTML.replace(wysihtml5.INVISIBLE_SPACE_REG_EXP, "");
-
-      if (tempElement) {
-        isEmpty = wysihtml5.lang.array(["", "<br>", wysihtml5.INVISIBLE_SPACE]).contains(tempElement.innerHTML);
-        list = wysihtml5.dom.convertToList(tempElement, nodeName.toLowerCase(), composer.parent.config.classNames.uneditableContainer);
-        if (isEmpty) {
-          composer.selection.selectNode(list.querySelector("li"), true);
-        }
+    // This space causes new lists to never break on enter
+    var INVISIBLE_SPACE_REG_EXP = /\uFEFF/g;
+    tempElement.innerHTML = tempElement.innerHTML.replace(wysihtml5.INVISIBLE_SPACE_REG_EXP, "");
+    if (tempElement) {
+      isEmpty = (/^(\s|(<br>))+$/i).test(tempElement.innerHTML);
+      list = wysihtml5.dom.convertToList(tempElement, nodeName.toLowerCase(), composer.parent.config.classNames.uneditableContainer);
+      if (sel) {
+        rangy.restoreSelection(sel);
       }
-    });
+      if (isEmpty) {
+        composer.selection.selectNode(list.querySelector("li"), true);
+      }
+    }
   };
 
   return {
@@ -9349,7 +9359,6 @@ wysihtml5.Commands = Base.extend(
           cmd           = (nodeName === "OL") ? "insertOrderedList" : "insertUnorderedList",
           selectedNode  = composer.selection.getSelectedNode(),
           list          = findListEl(selectedNode, nodeName, composer);
-
 
       if (!list.el) {
         if (composer.commands.support(cmd)) {
@@ -10401,8 +10410,12 @@ wysihtml5.views.View = Base.extend(
       var that                           = this,
           supportsDisablingOfAutoLinking = browser.canDisableAutoLinking(),
           supportsAutoLinking            = browser.doesAutoLinkingInContentEditable();
+
       if (supportsDisablingOfAutoLinking) {
-        this.commands.exec("autoUrlDetect", false);
+        // I have no idea why IE edge deletes element content here when calling the command,
+        var tmpHTML = this.element.innerHTML;
+        this.commands.exec("AutoUrlDetect", false, false);
+        this.element.innerHTML = tmpHTML;
       }
 
       if (!this.config.autoLink) {
@@ -11085,7 +11098,7 @@ wysihtml5.views.View = Base.extend(
         target, parent;
 
     // Select all (meta/ctrl + a)
-    if ((event.ctrlKey || event.metaKey) && keyCode === 65) {
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && keyCode === 65) {
       this.selection.selectAll();
       event.preventDefault();
       return;
